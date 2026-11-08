@@ -1,4 +1,3 @@
-
 name: Build Camera Security APK
 
 on:
@@ -21,13 +20,13 @@ jobs:
           test -f pubspec.yaml
           test -f lib/main.dart
 
-      - name: Set up Java
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Flutter
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -40,48 +39,59 @@ jobs:
             --org com.hussainalbeyati \
             --project-name camera_security
 
-      - name: Add camera permission
+      - name: Configure Android permissions
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
           p = Path("android/app/src/main/AndroidManifest.xml")
           s = p.read_text()
-          permission = '<uses-permission android:name="android.permission.CAMERA"/>'
 
-          if permission not in s:
-              s = s.replace(
-                  '<application',
-                  permission + '\n    <application',
-                  1
-              )
+          permissions = [
+              '<uses-permission android:name="android.permission.CAMERA"/>',
+              '<uses-permission android:name="android.permission.RECORD_AUDIO"/>',
+          ]
+
+          for permission in permissions:
+              if permission not in s:
+                  s = s.replace(
+                      '<application',
+                      permission + '\n    <application',
+                      1
+                  )
+
+          s = s.replace(
+              'android:label="camera_security"',
+              'android:label="Camera Security"'
+          )
 
           p.write_text(s)
           PY
 
-      - name: Prepare alarm asset
+      - name: Prepare alarm sound
         run: |
           mkdir -p assets
-          if [ -f alarm.wav ]; then
-            cp alarm.wav assets/alarm.wav
-          fi
+          test -f assets/alarm.wav || cp alarm.wav assets/alarm.wav
           test -f assets/alarm.wav
 
-      - name: Get Flutter packages
+      - name: Install dependencies
         run: flutter pub get
 
-      - name: Remove default test
+      - name: Generate app icon
+        run: dart run flutter_launcher_icons
+
+      - name: Remove default tests
         run: rm -rf test
 
-      - name: Analyze application
+      - name: Analyze Flutter project
         run: flutter analyze lib --no-fatal-infos --no-fatal-warnings
 
-      - name: Build Android APK
+      - name: Build release APK
         run: flutter build apk --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Camera-Security-APK
+          name: Camera-Security-Cyber-APK
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
