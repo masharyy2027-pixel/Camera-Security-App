@@ -1,0 +1,25 @@
+[project]
+name = "camera-security"
+version = "1.0.0"
+description = "Camera Security Android app built with Flet"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "flet>=0.86.0",
+    "flet-camera",
+    "flet-audio",
+    "opencv-python==5.0.0.93",
+]
+
+[tool.flet]
+org = "com.hussainalbeyati"
+product = "Camera Security"
+company = "Hussein Al-Bayati"
+copyright = "Copyright (C) 2026 Hussein Al-Bayati"
+permissions = ["camera"]
+assets_dir = "assets"
+
+[tool.flet.android]
+package = "com.hussainalbeyati.camerasecurity"
+min_sdk_version = 24
+target_sdk_version = 35
+extract_packages = ["cv2"]
