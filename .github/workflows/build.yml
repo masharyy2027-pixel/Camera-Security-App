@@ -1,0 +1,69 @@
+
+name: Build Camera Security APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract Flutter project
+        run: |
+          unzip -o CameraSecurity_Flutter_Project.zip -d .
+          test -f pubspec.yaml
+          test -f lib/main.dart
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform files
+        run: flutter create . --platforms=android --org com.hussainalbeyati --project-name camera_security
+
+      - name: Add camera permission
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          permission = '<uses-permission android:name="android.permission.CAMERA"/>'
+          if permission not in s:
+              s = s.replace('<application', permission + '\n    <application', 1)
+          p.write_text(s)
+          PY
+
+      - name: Prepare alarm asset
+        run: |
+          mkdir -p assets
+          if [ -f alarm.wav ]; then cp alarm.wav assets/alarm.wav; fi
+          test -f assets/alarm.wav
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Analyze Dart code
+        run: flutter analyze
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Camera-Security-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
