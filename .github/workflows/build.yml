@@ -39,6 +39,39 @@ jobs:
             --org com.hussainalbeyati \
             --project-name camera_security
 
+      - name: Set Android minimum SDK to 28
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("android/app/build.gradle.kts")
+          if p.exists():
+              s = p.read_text()
+              s, count = re.subn(
+                  r'minSdk\s*=\s*flutter\.minSdkVersion',
+                  'minSdk = 28',
+                  s
+              )
+          else:
+              p = Path("android/app/build.gradle")
+              if not p.exists():
+                  raise SystemExit("Android Gradle file not found")
+              s = p.read_text()
+              s, count = re.subn(
+                  r'minSdkVersion\s+flutter\.minSdkVersion',
+                  'minSdkVersion 28',
+                  s
+              )
+
+          if count == 0:
+              raise SystemExit("Could not find minSdk setting")
+          
+          p.write_text(s)
+          print("Minimum Android SDK set to 28")
+
+          PY
+
       - name: Configure Android permissions
         run: |
           python3 - <<'PY'
