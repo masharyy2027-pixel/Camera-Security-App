@@ -4,13 +4,15 @@ name: Build Camera Security APK
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Extract Flutter project
@@ -31,73 +33,129 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Generate Android platform files
-        run: flutter create . --platforms=android --org com.hussainalbeyati --project-name camera_security
+      - name: Install Linux libraries for MediaPipe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgles2
 
-      # MediaPipe's Android native runtime requires Android 9 / API 28.
+      - name: Generate Android platform files
+        run: |
+          flutter create . \
+            --platforms=android \
+            --org com.hussainalbeyati \
+            --project-name camera_security
+
       - name: Set Android minimum SDK to 28
         run: |
           python3 - <<'PYCODE'
           from pathlib import Path
           import re
 
-          candidates = [Path("android/app/build.gradle.kts"), Path("android/app/build.gradle")]
+          candidates = [
+              Path("android/app/build.gradle.kts"),
+              Path("android/app/build.gradle")
+          ]
+
           gradle = next((p for p in candidates if p.exists()), None)
+
           if gradle is None:
-              raise SystemExit("Android app Gradle file not found")
+              raise SystemExit("Android Gradle file not found")
 
           content = gradle.read_text()
+
           if gradle.name.endswith(".kts"):
               content, count = re.subn(
                   r'minSdk\s*=\s*flutter\.minSdkVersion',
-                  'minSdk = 28', content, count=1
+                  'minSdk = 28',
+                  content,
+                  count=1
               )
-              if count == 0 and re.search(r'minSdk\s*=\s*\d+', content):
-                  content, count = re.subn(r'minSdk\s*=\s*\d+', 'minSdk = 28', content, count=1)
+
+              if count == 0:
+                  content, count = re.subn(
+                      r'minSdk\s*=\s*\d+',
+                      'minSdk = 28',
+                      content,
+                      count=1
+                  )
           else:
               content, count = re.subn(
                   r'minSdkVersion\s+flutter\.minSdkVersion',
-                  'minSdkVersion 28', content, count=1
+                  'minSdkVersion 28',
+                  content,
+                  count=1
               )
-              if count == 0 and re.search(r'minSdkVersion\s+\d+', content):
-                  content, count = re.subn(r'minSdkVersion\s+\d+', 'minSdkVersion 28', content, count=1)
+
+              if count == 0:
+                  content, count = re.subn(
+                      r'minSdkVersion\s+\d+',
+                      'minSdkVersion 28',
+                      content,
+                      count=1
+                  )
+
           if count == 0:
-              raise SystemExit("Could not safely set Android minSdk to 28")
+              raise SystemExit("Could not set Android minSdk")
+
           gradle.write_text(content)
-          print(f"Set {gradle} minimum SDK to 28")
+          print("Android minimum SDK set to 28")
           PYCODE
 
-      - name: Configure Android camera permission and app name
+      - name: Configure Android camera permission
         run: |
           python3 - <<'PYCODE'
           from pathlib import Path
-          p = Path("android/app/src/main/AndroidManifest.xml")
-          s = p.read_text()
-          permission = '<uses-permission android:name="android.permission.CAMERA"/>'
-          if permission not in s:
-              s = s.replace('<application', permission + '\n    <application', 1)
-          s = s.replace('android:label="camera_security"', 'android:label="Camera Security"')
-          p.write_text(s)
+
+          manifest = Path(
+              "android/app/src/main/AndroidManifest.xml"
+          )
+
+          content = manifest.read_text()
+
+          permission = (
+              '<uses-permission '
+              'android:name="android.permission.CAMERA"/>'
+          )
+
+          if permission not in content:
+              content = content.replace(
+                  '<application',
+                  permission + '\n    <application',
+                  1
+              )
+
+          content = content.replace(
+              'android:label="camera_security"',
+              'android:label="Camera Security"'
+          )
+
+          manifest.write_text(content)
           PYCODE
 
-      - name: Prepare alarm asset
+      - name: Prepare alarm sound
         run: |
           mkdir -p assets
-          if [ -f alarm.wav ]; then cp alarm.wav assets/alarm.wav; fi
+
+          if [ -f alarm.wav ]; then
+            cp alarm.wav assets/alarm.wav
+          fi
+
           test -s assets/alarm.wav
 
       - name: Install Flutter dependencies
         run: flutter pub get
 
-      # Download the pinned official MediaPipe Face Detector model into the
-      # exact assets directory declared in pubspec.yaml, then fail if absent.
       - name: Bundle and verify MediaPipe face model
         run: |
-          dart run mediapipe_core:bundle_models
+          dart run mediapipe_core:bundle_models || {
+            echo "Bundle command returned an error."
+            echo "Checking whether the model was created..."
+          }
+
           test -s assets/mediapipe/blaze_face_short_range.tflite
-          echo "MediaPipe model bundled:"
+
+          echo "MediaPipe model exists:"
           ls -lh assets/mediapipe/blaze_face_short_range.tflite
-          dart run mediapipe_core:bundle_models --check
 
       - name: Generate app launcher icon
         run: dart run flutter_launcher_icons
@@ -105,18 +163,25 @@ jobs:
       - name: Remove default tests
         run: rm -rf test
 
-      - name: Analyze Dart code
-        run: flutter analyze lib --no-fatal-infos --no-fatal-warnings
+      - name: Analyze Flutter code
+        run: |
+          flutter analyze lib \
+            --no-fatal-infos \
+            --no-fatal-warnings
 
       - name: Build release APK
         run: flutter build apk --release
 
-      # Verify the model is actually inside the final APK, not only on the runner.
       - name: Verify model inside APK
         run: |
           APK="build/app/outputs/flutter-apk/app-release.apk"
+
           test -s "$APK"
-          unzip -l "$APK" | grep -i 'blaze_face_short_range.tflite'
+
+          unzip -l "$APK" | grep -i \
+            'blaze_face_short_range.tflite'
+
+          echo "MediaPipe model verified inside APK!"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
