@@ -1,11 +1,15 @@
 
-name: Build Camera Security APK
+name: Camera Security - MediaPipe Android Build
 
 on:
   workflow_dispatch:
   push:
     branches:
       - main
+      - master
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -16,176 +20,248 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Extract Flutter project
+        shell: bash
         run: |
-          unzip -o CameraSecurity_Flutter_Project.zip -d .
-          test -f pubspec.yaml
-          test -f lib/main.dart
+          set -e
 
-      - name: Set up Java
+          if [ -f "CameraSecurity_Flutter_Project.zip" ]; then
+            mkdir -p project
+            unzip -oq CameraSecurity_Flutter_Project.zip -d project
+          fi
+
+          if [ -f "pubspec.yaml" ]; then
+            PROJECT_DIR="$GITHUB_WORKSPACE"
+          else
+            PROJECT_DIR="$(find "$GITHUB_WORKSPACE/project" -name pubspec.yaml -not -path '*/.dart_tool/*' -printf '%h\n' | head -n 1)"
+          fi
+
+          if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/pubspec.yaml" ]; then
+            echo "ERROR: Flutter pubspec.yaml was not found."
+            find . -maxdepth 4 -name pubspec.yaml
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Flutter project found at: $PROJECT_DIR"
+
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: '3.47.9'
           cache: true
 
-      - name: Install Linux libraries for MediaPipe
+      - name: Install Linux libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1 libgles2
+          sudo apt-get install -y libegl1 libgles2 unzip
 
-      - name: Generate Android platform files
+      - name: Generate Android platform
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           flutter create . \
             --platforms=android \
             --org com.hussainalbeyati \
             --project-name camera_security
 
-      - name: Set Android minimum SDK to 28
+      - name: Configure Android SDK and permissions
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
-          python3 - <<'PYCODE'
+          set -e
+
+          python3 - <<'PY'
           from pathlib import Path
           import re
 
-          candidates = [
+          gradle_files = [
+              Path("android/app/build.gradle"),
               Path("android/app/build.gradle.kts"),
-              Path("android/app/build.gradle")
           ]
 
-          gradle = next((p for p in candidates if p.exists()), None)
+          for path in gradle_files:
+              if not path.exists():
+                  continue
 
-          if gradle is None:
-              raise SystemExit("Android Gradle file not found")
+              text = path.read_text()
 
-          content = gradle.read_text()
-
-          if gradle.name.endswith(".kts"):
-              content, count = re.subn(
-                  r'minSdk\s*=\s*flutter\.minSdkVersion',
-                  'minSdk = 28',
-                  content,
-                  count=1
-              )
-
-              if count == 0:
-                  content, count = re.subn(
-                      r'minSdk\s*=\s*\d+',
-                      'minSdk = 28',
-                      content,
-                      count=1
+              if path.name.endswith(".kts"):
+                  text = re.sub(
+                      r"minSdk\s*=\s*[^\n]+",
+                      "minSdk = 28",
+                      text
                   )
+              else:
+                  text = re.sub(
+                      r"minSdkVersion\s+[^ \n]+",
+                      "minSdkVersion 28",
+                      text
+                  )
+                  text = re.sub(
+                      r"minSdk\s*=\s*[^\n]+",
+                      "minSdk = 28",
+                      text
+                  )
+
+              path.write_text(text)
+              print(f"Configured minimum SDK in {path}")
+
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+
+          if manifest.exists():
+              text = manifest.read_text()
+
+              permissions = [
+                  "android.permission.CAMERA",
+                  "android.permission.RECORD_AUDIO",
+              ]
+
+              for permission in permissions:
+                  tag = f'<uses-permission android:name="{permission}" />'
+                  if permission not in text:
+                      text = text.replace(
+                          "<application",
+                          tag + "\n    <application",
+                          1
+                      )
+
+              manifest.write_text(text)
+              print("Android permissions configured.")
           else:
-              content, count = re.subn(
-                  r'minSdkVersion\s+flutter\.minSdkVersion',
-                  'minSdkVersion 28',
-                  content,
-                  count=1
-              )
-
-              if count == 0:
-                  content, count = re.subn(
-                      r'minSdkVersion\s+\d+',
-                      'minSdkVersion 28',
-                      content,
-                      count=1
-                  )
-
-          if count == 0:
-              raise SystemExit("Could not set Android minSdk")
-
-          gradle.write_text(content)
-          print("Android minimum SDK set to 28")
-          PYCODE
-
-      - name: Configure Android camera permission
-        run: |
-          python3 - <<'PYCODE'
-          from pathlib import Path
-
-          manifest = Path(
-              "android/app/src/main/AndroidManifest.xml"
-          )
-
-          content = manifest.read_text()
-
-          permission = (
-              '<uses-permission '
-              'android:name="android.permission.CAMERA"/>'
-          )
-
-          if permission not in content:
-              content = content.replace(
-                  '<application',
-                  permission + '\n    <application',
-                  1
-              )
-
-          content = content.replace(
-              'android:label="camera_security"',
-              'android:label="Camera Security"'
-          )
-
-          manifest.write_text(content)
-          PYCODE
+              raise SystemExit("AndroidManifest.xml was not found.")
+          PY
 
       - name: Prepare alarm sound
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          mkdir -p assets
+          set -e
 
-          if [ -f alarm.wav ]; then
+          if [ -f "alarm.wav" ]; then
+            mkdir -p assets
             cp alarm.wav assets/alarm.wav
+            echo "Alarm sound copied successfully."
+          elif [ -f "assets/alarm.wav" ]; then
+            echo "Alarm sound already exists."
+          else
+            echo "WARNING: alarm.wav was not found."
           fi
 
-          test -s assets/alarm.wav
-
-      - name: Install Flutter dependencies
-        run: flutter pub get
-
-      - name: Bundle and verify MediaPipe face model
+      - name: Get Flutter dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          dart run mediapipe_core:bundle_models || {
-            echo "Bundle command returned an error."
-            echo "Checking whether the model was created..."
-          }
+          flutter pub get
 
-          test -s assets/mediapipe/blaze_face_short_range.tflite
-
-          echo "MediaPipe model exists:"
-          ls -lh assets/mediapipe/blaze_face_short_range.tflite
-
-      - name: Generate app launcher icon
-        run: dart run flutter_launcher_icons
-
-      - name: Remove default tests
-        run: rm -rf test
-
-      - name: Analyze Flutter code
+      - name: Bundle MediaPipe model and diagnose Build Hooks
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
-          flutter analyze lib \
-            --no-fatal-infos \
-            --no-fatal-warnings
+          set +e
 
-      - name: Build release APK
-        run: flutter build apk --release
+          echo "======================================"
+          echo "Starting MediaPipe model bundling"
+          echo "======================================"
 
-      - name: Verify model inside APK
+          dart run mediapipe_core:bundle_models 2>&1 | tee mediapipe-bundle.log
+          RESULT=${PIPESTATUS[0]}
+
+          echo ""
+          echo "MediaPipe command exit code: $RESULT"
+
+          echo ""
+          echo "======================================"
+          echo "BUILD HOOK DIAGNOSTICS"
+          echo "======================================"
+
+          HOOK_DIR=".dart_tool/hooks_runner"
+
+          if [ -d "$HOOK_DIR" ]; then
+            while IFS= read -r FILE; do
+              echo ""
+              echo "========== $FILE =========="
+              cat "$FILE" || true
+            done < <(
+              find "$HOOK_DIR" -type f \
+                \( -name "stderr.txt" -o -name "stdout.txt" \
+                -o -name "input.json" -o -name "output.json" \)
+            )
+          else
+            echo "No hooks_runner directory was found."
+          fi
+
+          echo ""
+          echo "======================================"
+          echo "MODEL FILE CHECK"
+          echo "======================================"
+
+          if [ -d "assets/mediapipe" ]; then
+            find assets/mediapipe -maxdepth 2 -type f -printf '%p (%s bytes)\n'
+          else
+            echo "assets/mediapipe directory does not exist."
+          fi
+
+          MODEL="assets/mediapipe/blaze_face_short_range.tflite"
+
+          if [ "$RESULT" -ne 0 ]; then
+            echo "ERROR: MediaPipe bundling or its build hooks failed."
+            exit "$RESULT"
+          fi
+
+          if [ ! -s "$MODEL" ]; then
+            echo "ERROR: Face detection model is missing or empty."
+            exit 1
+          fi
+
+          echo "SUCCESS: MediaPipe face detection model exists."
+
+      - name: Analyze Flutter project
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          flutter analyze
+
+      - name: Build Android APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          flutter build apk --release
+
+      - name: Verify APK and MediaPipe model
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+
           APK="build/app/outputs/flutter-apk/app-release.apk"
 
           test -s "$APK"
 
-          unzip -l "$APK" | grep -i \
-            'blaze_face_short_range.tflite'
+          echo "APK created:"
+          ls -lh "$APK"
 
-          echo "MediaPipe model verified inside APK!"
+          echo "Checking MediaPipe model inside APK..."
 
-      - name: Upload APK
+          unzip -l "$APK" | grep "blaze_face_short_range.tflite"
+
+          echo "APK verification completed."
+
+      - name: Upload MediaPipe hook diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaPipe-hook-diagnostics
+          path: |
+            ${{ env.PROJECT_DIR }}/.dart_tool/hooks_runner/
+            ${{ env.PROJECT_DIR }}/mediapipe-bundle.log
+          if-no-files-found: warn
+
+      - name: Upload Android APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Camera-Security-MediaPipe-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
