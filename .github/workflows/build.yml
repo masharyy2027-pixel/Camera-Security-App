@@ -1,4 +1,3 @@
-
 name: Camera Security - MediaPipe Android Build
 
 on:
@@ -41,7 +40,6 @@ jobs:
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project: $PROJECT_DIR"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -128,7 +126,6 @@ jobs:
                   )
 
           manifest.write_text(text)
-          print("Android configuration completed.")
           PY
 
       - name: Prepare alarm sound
@@ -150,7 +147,7 @@ jobs:
         run: |
           flutter pub get
 
-      - name: Bundle MediaPipe model and verify actual filename
+      - name: Bundle MediaPipe model
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -158,38 +155,32 @@ jobs:
 
           dart run mediapipe_core:bundle_models
 
-          echo "Checking MediaPipe model directory..."
-
-          if [ ! -s "assets/mediapipe/manifest.json" ]; then
-            echo "ERROR: MediaPipe manifest is missing."
-            exit 1
-          fi
+          test -s assets/mediapipe/manifest.json
 
           MODEL_FILE="$(find assets/mediapipe -maxdepth 1 -type f \
             ! -name 'manifest.json' -size +0c | head -n 1)"
 
           if [ -z "$MODEL_FILE" ]; then
-            echo "ERROR: No actual model file was found."
+            echo "ERROR: Model not found."
             ls -lah assets/mediapipe/
             exit 1
           fi
 
-          echo "SUCCESS: Model found:"
+          echo "MediaPipe model successfully bundled:"
           ls -lh "$MODEL_FILE"
-          echo "Manifest found:"
-          ls -lh assets/mediapipe/manifest.json
+          cat assets/mediapipe/manifest.json
 
-      - name: Analyze Flutter project
+      - name: Analyze application source
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          flutter analyze
+          flutter analyze lib
 
       - name: Build Android APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           flutter build apk --release
 
-      - name: Verify APK and bundled MediaPipe files
+      - name: Verify APK and MediaPipe files
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -197,21 +188,18 @@ jobs:
 
           APK="build/app/outputs/flutter-apk/app-release.apk"
 
-          if [ ! -s "$APK" ]; then
-            echo "ERROR: APK was not created."
-            exit 1
-          fi
+          test -s "$APK"
 
           echo "APK created:"
           ls -lh "$APK"
 
-          echo "Checking MediaPipe manifest inside APK..."
-          unzip -Z1 "$APK" | grep -F "assets/mediapipe/manifest.json"
+          echo "Checking MediaPipe manifest..."
+          unzip -Z1 "$APK" | grep -E 'assets/flutter_assets/assets/mediapipe/manifest.json'
 
-          echo "Checking actual model inside APK..."
-          unzip -Z1 "$APK" | grep -E 'assets/mediapipe/[0-9a-f]{64}$'
+          echo "Checking bundled model..."
+          unzip -Z1 "$APK" | grep -E 'assets/flutter_assets/assets/mediapipe/[0-9a-f]{64}$'
 
-          echo "SUCCESS: MediaPipe files are packaged in APK."
+          echo "APK verification completed."
 
       - name: Upload MediaPipe diagnostics
         if: always()
