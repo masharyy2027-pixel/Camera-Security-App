@@ -148,6 +148,29 @@ jobs:
         run: |
           flutter pub get
 
+      - name: Generate Android app icon
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+
+          ICON="assets/app_icon.png"
+
+          if [ ! -s "$ICON" ]; then
+            echo "ERROR: App icon not found: $ICON"
+            exit 1
+          fi
+
+          echo "Generating Android launcher icons..."
+          dart run flutter_launcher_icons
+
+          echo "Checking generated icons..."
+          find android/app/src/main/res -type f -name 'ic_launcher.png' -print
+
+          test -s android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+
+          echo "SUCCESS: Android app icon generated."
+
       - name: Bundle MediaPipe model
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -200,6 +223,9 @@ jobs:
 
           echo "Checking bundled model..."
           unzip -Z1 "$APK" | grep -E 'assets/flutter_assets/assets/mediapipe/[0-9a-f]{64}$'
+
+          echo "Checking Android launcher icon..."
+          unzip -l "$APK" | grep 'res/mipmap'
 
           echo "APK verification completed."
 
