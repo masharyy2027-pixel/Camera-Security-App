@@ -68,7 +68,7 @@ jobs:
             --org com.hussainalbeyati \
             --project-name camera_security
 
-      - name: Configure Android SDK and permissions
+      - name: Configure Android SDK permissions and app name
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -126,7 +126,23 @@ jobs:
                       1
                   )
 
+          if re.search(r'android:label="[^"]*"', text):
+              text = re.sub(
+                  r'android:label="[^"]*"',
+                  'android:label="Camera Security"',
+                  text,
+                  count=1
+              )
+          else:
+              text = text.replace(
+                  "<application",
+                  '<application android:label="Camera Security"',
+                  1
+              )
+
           manifest.write_text(text)
+
+          print("Application name set to: Camera Security")
           PY
 
       - name: Prepare alarm sound
@@ -161,15 +177,15 @@ jobs:
             exit 1
           fi
 
-          echo "Generating Android launcher icons..."
           dart run flutter_launcher_icons
 
-          echo "Checking generated icons..."
+          echo "Generated launcher icons:"
           find android/app/src/main/res -type f -name 'ic_launcher.png' -print
 
           test -s android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          test -s android/app/src/main/res/mipmap-mdpi/ic_launcher.png
 
-          echo "SUCCESS: Android app icon generated."
+          echo "SUCCESS: Launcher icons generated."
 
       - name: Bundle MediaPipe model
         working-directory: ${{ env.PROJECT_DIR }}
@@ -223,9 +239,6 @@ jobs:
 
           echo "Checking bundled model..."
           unzip -Z1 "$APK" | grep -E 'assets/flutter_assets/assets/mediapipe/[0-9a-f]{64}$'
-
-          echo "Checking Android launcher icon..."
-          unzip -l "$APK" | grep 'res/mipmap'
 
           echo "APK verification completed."
 
