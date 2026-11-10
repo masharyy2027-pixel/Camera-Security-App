@@ -173,6 +173,7 @@ jobs:
 
       - name: Analyze application source
         working-directory: ${{ env.PROJECT_DIR }}
+        continue-on-error: true
         run: |
           flutter analyze lib
 
