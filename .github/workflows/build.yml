@@ -36,13 +36,12 @@ jobs:
           fi
 
           if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/pubspec.yaml" ]; then
-            echo "ERROR: Flutter pubspec.yaml was not found."
-            find . -maxdepth 4 -name pubspec.yaml
+            echo "ERROR: Flutter project was not found."
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Flutter project found at: $PROJECT_DIR"
+          echo "Project: $PROJECT_DIR"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -80,12 +79,10 @@ jobs:
           from pathlib import Path
           import re
 
-          gradle_files = [
+          for path in [
               Path("android/app/build.gradle"),
-              Path("android/app/build.gradle.kts"),
-          ]
-
-          for path in gradle_files:
+              Path("android/app/build.gradle.kts")
+          ]:
               if not path.exists():
                   continue
 
@@ -110,31 +107,28 @@ jobs:
                   )
 
               path.write_text(text)
-              print(f"Configured minimum SDK in {path}")
 
           manifest = Path("android/app/src/main/AndroidManifest.xml")
 
-          if manifest.exists():
-              text = manifest.read_text()
+          if not manifest.exists():
+              raise SystemExit("AndroidManifest.xml not found")
 
-              permissions = [
-                  "android.permission.CAMERA",
-                  "android.permission.RECORD_AUDIO",
-              ]
+          text = manifest.read_text()
 
-              for permission in permissions:
-                  tag = f'<uses-permission android:name="{permission}" />'
-                  if permission not in text:
-                      text = text.replace(
-                          "<application",
-                          tag + "\n    <application",
-                          1
-                      )
+          for permission in [
+              "android.permission.CAMERA",
+              "android.permission.RECORD_AUDIO"
+          ]:
+              tag = f'<uses-permission android:name="{permission}" />'
+              if permission not in text:
+                  text = text.replace(
+                      "<application",
+                      tag + "\n    <application",
+                      1
+                  )
 
-              manifest.write_text(text)
-              print("Android permissions configured.")
-          else:
-              raise SystemExit("AndroidManifest.xml was not found.")
+          manifest.write_text(text)
+          print("Android configuration completed.")
           PY
 
       - name: Prepare alarm sound
@@ -145,11 +139,10 @@ jobs:
           if [ -f "alarm.wav" ]; then
             mkdir -p assets
             cp alarm.wav assets/alarm.wav
-            echo "Alarm sound copied successfully."
           elif [ -f "assets/alarm.wav" ]; then
-            echo "Alarm sound already exists."
+            echo "Alarm already exists."
           else
-            echo "WARNING: alarm.wav was not found."
+            echo "WARNING: alarm.wav not found."
           fi
 
       - name: Get Flutter dependencies
@@ -157,67 +150,34 @@ jobs:
         run: |
           flutter pub get
 
-      - name: Bundle MediaPipe model and diagnose Build Hooks
+      - name: Bundle MediaPipe model and verify actual filename
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set +e
+          set -e
 
-          echo "======================================"
-          echo "Starting MediaPipe model bundling"
-          echo "======================================"
+          dart run mediapipe_core:bundle_models
 
-          dart run mediapipe_core:bundle_models 2>&1 | tee mediapipe-bundle.log
-          RESULT=${PIPESTATUS[0]}
+          echo "Checking MediaPipe model directory..."
 
-          echo ""
-          echo "MediaPipe command exit code: $RESULT"
-
-          echo ""
-          echo "======================================"
-          echo "BUILD HOOK DIAGNOSTICS"
-          echo "======================================"
-
-          HOOK_DIR=".dart_tool/hooks_runner"
-
-          if [ -d "$HOOK_DIR" ]; then
-            while IFS= read -r FILE; do
-              echo ""
-              echo "========== $FILE =========="
-              cat "$FILE" || true
-            done < <(
-              find "$HOOK_DIR" -type f \
-                \( -name "stderr.txt" -o -name "stdout.txt" \
-                -o -name "input.json" -o -name "output.json" \)
-            )
-          else
-            echo "No hooks_runner directory was found."
-          fi
-
-          echo ""
-          echo "======================================"
-          echo "MODEL FILE CHECK"
-          echo "======================================"
-
-          if [ -d "assets/mediapipe" ]; then
-            find assets/mediapipe -maxdepth 2 -type f -printf '%p (%s bytes)\n'
-          else
-            echo "assets/mediapipe directory does not exist."
-          fi
-
-          MODEL="assets/mediapipe/blaze_face_short_range.tflite"
-
-          if [ "$RESULT" -ne 0 ]; then
-            echo "ERROR: MediaPipe bundling or its build hooks failed."
-            exit "$RESULT"
-          fi
-
-          if [ ! -s "$MODEL" ]; then
-            echo "ERROR: Face detection model is missing or empty."
+          if [ ! -s "assets/mediapipe/manifest.json" ]; then
+            echo "ERROR: MediaPipe manifest is missing."
             exit 1
           fi
 
-          echo "SUCCESS: MediaPipe face detection model exists."
+          MODEL_FILE="$(find assets/mediapipe -maxdepth 1 -type f \
+            ! -name 'manifest.json' -size +0c | head -n 1)"
+
+          if [ -z "$MODEL_FILE" ]; then
+            echo "ERROR: No actual model file was found."
+            ls -lah assets/mediapipe/
+            exit 1
+          fi
+
+          echo "SUCCESS: Model found:"
+          ls -lh "$MODEL_FILE"
+          echo "Manifest found:"
+          ls -lh assets/mediapipe/manifest.json
 
       - name: Analyze Flutter project
         working-directory: ${{ env.PROJECT_DIR }}
@@ -229,7 +189,7 @@ jobs:
         run: |
           flutter build apk --release
 
-      - name: Verify APK and MediaPipe model
+      - name: Verify APK and bundled MediaPipe files
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -237,25 +197,30 @@ jobs:
 
           APK="build/app/outputs/flutter-apk/app-release.apk"
 
-          test -s "$APK"
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: APK was not created."
+            exit 1
+          fi
 
           echo "APK created:"
           ls -lh "$APK"
 
-          echo "Checking MediaPipe model inside APK..."
+          echo "Checking MediaPipe manifest inside APK..."
+          unzip -Z1 "$APK" | grep -F "assets/mediapipe/manifest.json"
 
-          unzip -l "$APK" | grep "blaze_face_short_range.tflite"
+          echo "Checking actual model inside APK..."
+          unzip -Z1 "$APK" | grep -E 'assets/mediapipe/[0-9a-f]{64}$'
 
-          echo "APK verification completed."
+          echo "SUCCESS: MediaPipe files are packaged in APK."
 
-      - name: Upload MediaPipe hook diagnostics
+      - name: Upload MediaPipe diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: MediaPipe-hook-diagnostics
           path: |
             ${{ env.PROJECT_DIR }}/.dart_tool/hooks_runner/
-            ${{ env.PROJECT_DIR }}/mediapipe-bundle.log
+            ${{ env.PROJECT_DIR }}/assets/mediapipe/
           if-no-files-found: warn
 
       - name: Upload Android APK
